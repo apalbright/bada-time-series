@@ -1,0 +1,268 @@
+---
+title: "Time Series Graphs with BADA Data"
+author: Alex Albright
+date: "11/23/20"
+output: html_notebook
+---
+
+**Motivation:** Back in May/June, I made some graphs for a [Bay Area Disc Association (BADA) blog post](https://bayareadisc.org/p/thanks-for-supporting-your-team) to show how quickly and drastically COVID-19 impacted program registrations. I use updated data (through November) to illustrate a number of ways to visualize time series data.
+
+```{r warning=FALSE}
+#As usual, call libraries.
+library(tidyverse); library(janitor);library(data.table);library(lubridate);
+library(magick);library(magrittr);library(scales);library(ggtext)
+```
+
+We went into the BADA admin portal (well, Jesse did since he works there) and downloaded transactions (filter: by product == `event`, so we are just getting events data) from (1) Jan 2017-Jan 2019 and (2) Jan 2019-present.^[It couldn't handle downloading them all at once, thus the two separate downloads. I also came back to this project in November after a break since May, so I downloaded the most recent stuff separately then.]
+
+Now, I pull in the BADA data.^[I'm not sharing the raw data for this since it's BADA admin data and not publicly available.] I want `purchases` data (since `transactions` can include multiple purchases) and I want registrations over time. I filter to omit refunds since those are not unique registrations.
+
+```{r}
+d1<-clean_names(fread("badata/data17-18/purchases.csv"))%>%select(-postal_code)
+d2<-clean_names(fread("badata/data19-20/purchases.csv"))%>%select(-postal_code)
+d3<-clean_names(fread("badata/datalate-20/purchases.csv"))%>%select(-postal_code)
+purc<-bind_rows(d1, d2, d3)
+
+# make date variables
+badata<-purc%>%
+  mutate(date=ymd_hms(processed_at))%>%
+  mutate(month=floor_date(date, "month"),
+         week=floor_date(date, "week"))
+
+#filter to exclude refunds
+badata1<-badata%>%
+  filter(total_paid_refund==0)
+```
+
+Next, I get into graphing. FYI for all the graphs I make I add in the BADA logo as well as a still image of [Millhouse playing frisbee by himself.](https://www.youtube.com/watch?v=i9DjUs4e2gs) I do this with the `magick` package -- see [here](https://www.danielphadley.com/ggplot-logo/) for general package info and [here](https://rpubs.com/apalbright/senate-votes-visualized) for another example of using this package.
+
+# Basics
+
+## Time Series in levels
+
+I simply calculate and plot the total count of purchases for events (registrations by month).
+
+```{r}
+data1<-badata1%>%
+  group_by(month)%>%
+  summarise(n=n())%>%
+  # have to add 0s for months with no purchases
+  add_row(tibble_row(month=ymd("2020-06-01"),n=0))%>%
+  add_row(tibble_row(month=ymd("2020-07-01"),n=0))%>%
+  add_row(tibble_row(month=ymd("2020-08-01"),n=0))
+  
+ggplot(data1, aes(x=month, y=n)) + 
+  geom_point(size=1.2)+ geom_line(size=.7)+ 
+  geom_hline(yintercept = 0, color=alpha("red", 0.5), linetype= "twodash", size=1)+
+  theme_minimal()+theme(text=element_text(family="Palatino", size=13), 
+                        legend.position = "top", panel.grid.minor = element_blank(),
+                        plot.title = element_text(size=22),
+                        axis.text.x = element_text(face = "bold"),
+                        axis.text.y = element_text(face = "bold"))+ 
+  labs(y="", x="", 
+       caption="Data: BADA event/program registrations, Jan 1, 2017 - November 22, 2020. | Visual: Alex Albright.") +
+  scale_y_continuous(limits=c(0,2000))+
+  ggtitle("\nBADA registrations plummet during pandemic", subtitle = "Total program registrations by month")
+
+ggsave("draft/bada0.png", width=12, height=6, dpi = 300)
+
+#add logo
+background <- image_read("draft/bada0.png")
+logo <- image_read("images/logo.png")
+logo <- logo %>%
+  image_scale("350") 
+new <- image_composite(background, logo, offset = "+3100+30")
+image_write(new, "draft/bada0.png", flatten = F)
+
+# add milhouse
+background <- image_read("draft/bada0.png")
+logo <- image_read("images/milhouse1.png")
+logo <- logo %>%
+  image_scale("350") 
+new <- image_composite(background, logo, offset = "+2850+1290")
+image_write(new, "final_graphs/bada-time-series.png", flatten = F)
+```
+
+Issue: there's a ton of seasonality (some months always have higher registrations than others). This comes up with lots of covid graphs we've seen in the last year!
+
+Ways to deal:
+
+1. compare month by month
+2. YOY plot
+3. remove month fixed effects
+
+## [1] Compare month by month
+
+I calculate and plot the total count of purchases for events (registrations by month). This time I plot the years on top of one another and look across months. (But the counts by month-year are the same as what's shown in the simple full time series above.)
+
+```{r}
+data1<-badata1%>%
+  mutate(month=month(date))%>%
+  mutate(year=year(date))%>%
+  group_by(month, year)%>%
+  summarise(n=n())%>%ungroup%>%
+  add_row(tibble_row(month=6, year=2020, n=0))%>%
+  add_row(tibble_row(month=7, year=2020, n=0))%>%
+  add_row(tibble_row(month=8, year=2020, n=0))
+
+ggplot(data1, aes(x=month, y=n, color=factor(year), linetype=factor(year))) + 
+  geom_point(size=1.2)+ geom_line(size=.7)+ 
+  theme_minimal()+theme(text=element_text(family="Palatino", size=13), 
+                        legend.position = "top", panel.grid.minor = element_blank(),
+                        plot.title = element_text(size=22),
+                        axis.text.x = element_text(face = "bold"),
+                        axis.text.y = element_text(face = "bold"))+ 
+  labs(y="", x="", 
+       caption="Data: BADA event/program registrations, Jan 1, 2017 - November 22, 2020. | Visual: Alex Albright.") +
+  scale_x_continuous(limits=c(1,12), breaks=1:12, 
+                     labels=c("January", "February", "March", "April", 
+                              "May", "June", "July", "August", 
+                              "September", "October", "November", "December"))+
+  scale_y_continuous(limits=c(0,2000))+
+  scale_color_manual(name="Year", 
+                     values = c(alpha(c("#41B6C4", "#225EA8", "#737373"), 0.5), "red"))+
+  scale_linetype_manual(name="Year", values=c("twodash", "twodash", "twodash", "solid"))+
+  #geom_rect(aes(ymin = -100, ymax = 100, xmin = 3.5, xmax = 5.5), alpha = 0.01, fill="mediumseagreen")+
+  ggtitle("\nBADA registrations plummet during pandemic", subtitle = "Total program registrations by month")
+
+ggsave("draft/bada1.png", width=10 , height=6, dpi = 300)
+
+#add logo
+background <- image_read("draft/bada1.png")
+logo <- image_read("images/logo.png")
+logo <- logo %>%
+  image_scale("400") 
+new <- image_composite(background, logo, offset = "+2400+30")
+image_write(new, "draft/bada1.png", flatten = F)
+
+# add milhouse
+background <- image_read("draft/bada1.png")
+logo <- image_read("images/milhouse1.png")
+logo <- logo %>%
+  image_scale("350") 
+new <- image_composite(background, logo, offset = "+850+1290")
+image_write(new, "final_graphs/bada-month-comparison.png", flatten = F)
+```
+
+## YOY plot 
+
+Focus on year over year (YOY) change using 3 prior years (2017-2019) as the reference. I could also do this just relative to 2019. It'll look pretty similar.
+
+```{r}
+data1<-badata1%>%
+  mutate(month=month(date))%>%
+  mutate(year=year(date))%>%
+  group_by(month, year)%>%
+  summarise(n=n())%>%
+  mutate(yeargroup=if_else(year<2020, "2017-2019", "2020"))%>%
+  group_by(month, yeargroup)%>%
+  summarise(avg=mean(n))%>%
+  pivot_wider(names_from = yeargroup, values_from = avg)%>%
+  mutate(change=(`2020`-`2017-2019`)/`2017-2019`)%>%
+  mutate(`2020`=if_else(is.na(`2020`) & month<=11, 0, `2020`))%>%
+  mutate(`change`=if_else(is.na(`change`)& month<=11, -1, `change`))
+
+ggplot(data1, aes(x=month, y=change)) + 
+  geom_point(size=2)+ geom_line(size=1)+ 
+  theme_minimal()+theme(text=element_text(family="Palatino", size=13), 
+                        legend.position = "top", panel.grid.minor = element_blank(),
+                        plot.title = element_text(size=22),
+                        axis.text.x = element_text(face = "bold"))+
+  theme(text=element_text(family="Palatino", size=13), 
+                        legend.position = "top", panel.grid.minor = element_blank(),
+                        plot.title = element_text(size=21))+ 
+  labs(y="", x="", caption="Data: BADA event/program registrations, Jan 1, 2017 - November 22, 2020. | Visual: Alex Albright.<br>*For each month, % change is calculated off of the month's registration mean from the past 3 years (2017-2019)*.") +
+  theme(plot.caption = element_markdown(lineheight = 1.2),
+        axis.text.y = element_markdown(size=12),
+        axis.text.x = element_markdown(size=12))+
+  geom_hline(yintercept = 0, color=alpha("#41B6C4", 0.5), linetype= "twodash", size=1)+
+  geom_hline(yintercept = -1, color=alpha("red", 0.5), linetype= "twodash", size=1)+
+  scale_y_continuous(breaks=seq(-1, 0.5, 0.5), 
+                     labels=c("**-100%**<br>*(down to ~0)*","**-50%**<br>*(cut in half)*", 
+                              "**0%**<br>*(average)*", "**+50%**<br>*(above average)*"))+
+  scale_x_continuous(limits=c(1,12), breaks=1:12, 
+                     labels=c("January", "February", "March", "April", 
+                              "May", "June", "July", "August", 
+                              "September", "October", "November", "December"))+
+  ggtitle("\nBADA registrations plummet during pandemic", subtitle = "% change in BADA registrations in 2020")
+ggsave("draft/bada2.png", width=12, height=6, dpi = 300)
+
+#add logo
+background <- image_read("draft/bada2.png")
+logo <- image_read("images/logo.png")
+logo <- logo %>%
+  image_scale("300") 
+new <- image_composite(background, logo, offset = "+50+30")
+image_write(new, "draft/bada2.png", flatten = F)
+
+# add milhouse
+background <- image_read("draft/bada2.png")
+logo <- image_read("images/milhouse1.png")
+logo <- logo %>%
+  image_scale("350") 
+new <- image_composite(background, logo, offset = "+1790+1230")
+image_write(new, "final_graphs/bada-yoy.png", flatten = F)
+```
+# Econ-y stuff
+
+## Residualizing
+
+Let's adjust for monthly variations by removing month fixed effects. Essentially, registrations for a month and year $registrations_{m,y}$ are a function of the month fixed effect $\overline{registrations_m}$ and then some residual $\epsilon_{m,y}$.
+
+In [Gelman, Hill, Vehtari](https://avehtari.github.io/ROS-Examples/) lingo, we can also say this is a "comparison within groups using varying intercept models." We allow for a different intercept for each month (or, we are demeaning by month) and then plotting the unexplained variation (residuals) for each month-year!
+
+$$registrations_{m,y}=\overline{registrations_m} + \epsilon_{m,y}$$
+
+```{r}
+#Regress registrations on a month factor variables and then plot residuals over month-year:
+
+library(broom)
+data1<-badata1%>%
+  group_by(month)%>%
+  summarise(n=n())%>%
+  # have to add 0s for months with no purchases
+  add_row(tibble_row(month=ymd("2020-06-01"),n=0))%>%
+  add_row(tibble_row(month=ymd("2020-07-01"),n=0))%>%
+  add_row(tibble_row(month=ymd("2020-08-01"),n=0))
+
+data1<-data1%>%mutate(month_only=month(month))%>%
+  mutate(month_only=factor(month_only),
+         month=factor(month))
+
+mod<-lm(n~month_only, data=data1)
+
+df <- augment(mod)
+df<-inner_join(df, data1)
+df<-df%>%mutate(month=ymd(month))
+
+ggplot(df, aes(x= month, y = .resid, group=1)) + 
+  geom_point(size=1.2)+ geom_line(size=.7)+
+  geom_hline(yintercept = 0, color=alpha("red", 0.5), linetype= "twodash", size=1)+
+  theme_minimal()+theme(text=element_text(family="Palatino", size=13), 
+                        legend.position = "top", panel.grid.minor = element_blank(),
+                        plot.title = element_text(size=22),
+                        axis.text.x = element_text(face = "bold"),
+                        axis.text.y = element_text(face = "bold"))+ 
+  labs(y="", x="", 
+       caption="Data: BADA event/program registrations, Jan 1, 2017 - November 22, 2020. | Visual: Alex Albright.") +
+  scale_x_date(date_labels = "%Y")+
+  ggtitle("\nBADA registrations plummet during pandemic", subtitle = "Residualized program registrations by month")
+
+ggsave("draft/bada3.png", width=12, height=6, dpi = 300)
+
+#add logo
+background <- image_read("draft/bada3.png")
+logo <- image_read("images/logo.png")
+logo <- logo %>%
+  image_scale("350") 
+new <- image_composite(background, logo, offset = "+3100+30")
+image_write(new, "draft/bada3.png", flatten = F)
+
+# add milhouse
+background <- image_read("draft/bada3.png")
+logo <- image_read("images/milhouse1.png")
+logo <- logo %>%
+  image_scale("350") 
+new <- image_composite(background, logo, offset = "+3180+1050")
+image_write(new, "final_graphs/bada-residuals.png", flatten = F)
+```
