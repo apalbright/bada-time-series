@@ -246,7 +246,7 @@ ggplot(df, aes(x= month, y = .resid, group=1)) +
   labs(y="", x="", 
        caption="Data: BADA event/program registrations, Jan 1, 2017 - November 22, 2020. | Visual: Alex Albright.") +
   scale_x_date(date_labels = "%Y")+
-  ggtitle("\nBADA registrations plummet during pandemic", subtitle = "Residualized program registrations by month")
+  ggtitle("\nBADA registrations plummet during pandemic", subtitle = "Residualized program registrations (removing month fixed effects)")
 
 ggsave("draft/bada3.png", width=12, height=6, dpi = 300)
 
